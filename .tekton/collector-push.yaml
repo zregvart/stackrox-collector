@@ -3,19 +3,17 @@ kind: PipelineRun
 
 metadata:
   annotations:
-    build.appstudio.openshift.io/repo: https://github.com/stackrox/collector?rev={{revision}}
+    build.appstudio.openshift.io/repo: https://github.com/zregvart/stackrox-collector?rev={{revision}}
     build.appstudio.redhat.com/commit_sha: '{{revision}}'
     build.appstudio.redhat.com/target_branch: '{{target_branch}}'
     pipelinesascode.tekton.dev/max-keep-runs: "500"
-    pipelinesascode.tekton.dev/on-event: '[push]'
-    pipelinesascode.tekton.dev/on-target-branch: '[master]'
-  creationTimestamp: null
+    pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch == "master"
   labels:
-    appstudio.openshift.io/application: acs
+    appstudio.openshift.io/application: stackrox-collector
     appstudio.openshift.io/component: collector
     pipelines.appstudio.openshift.io/type: build
   name: collector-on-push
-  namespace: rh-acs-tenant
+  namespace: zregvart-tenant
 
 spec:
 
@@ -23,52 +21,38 @@ spec:
   - name: dockerfile
     value: collector/container/konflux.Dockerfile
   - name: git-url
-    value: '{{repo_url}}'
-  - name: image-expires-after
-    # TODO(ROX-20230): make release images not expire.
-    value: '13w'
+    value: https://github.com/zregvart/stackrox-collector
   - name: output-image
-    value: quay.io/redhat-user-workloads/rh-acs-tenant/acs/collector:{{revision}}
+    value: quay.io/redhat-user-workloads-stage/zregvart-tenant/stackrox-collector/collector:{{revision}}
   - name: path-context
     value: .
   - name: revision
     value: '{{revision}}'
   - name: rebuild
     value: 'true'
-  # TODO(ROX-20234): Enable hermetic builds
-  # - name: hermetic
-  #   value: "true"
-  # No language dependencies are required for collector image.
-  - name: prefetch-input
-    value: ''
+  - name: hermetic
+    value: "false"
   - name: clone-submodules
     value: 'true'
   - name: build-source-image
     value: 'true'
-
   workspaces:
   - name: workspace
     volumeClaimTemplate:
-      metadata:
-        creationTimestamp: null
       spec:
         accessModes:
         - ReadWriteOnce
         resources:
           requests:
             storage: 5Gi
-      status: { }
   - name: git-auth
     secret:
       secretName: '{{ git_auth_secret }}'
   - name: subscription-manager-activation-key
     secret:
       secretName: subscription-manager-activation-key
-
-  # The pipeline regularly takes >1h to finish.
   timeouts:
     pipeline: 1h30m0s
-
   pipelineSpec:
 
     finally:
@@ -451,5 +435,8 @@ spec:
       - input: $(params.skip-checks)
         operator: in
         values: [ "false" ]
-
-status: { }
+  taskRunTemplate:
+    podTemplate:
+      env:
+        - name: DEBUG
+          value: '1'
