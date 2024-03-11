@@ -12,6 +12,7 @@ COPY ./.konflux /tmp/.konflux
 
 # TODO(ROX-20234): use hermetic builds when installing/updating RPMs becomes hermetic.
 RUN /tmp/.konflux/scripts/subscription-manager-bro.sh register /mnt && \
+    subscription-manager repos --enable codeready-builder-for-rhel-8-x86_64-rpms && \
     dnf -y --installroot=/mnt upgrade --nobest && \
     dnf -y --installroot=/mnt install --nobest \
         make \

@@ -16,7 +16,7 @@ SECRET_KEY="activation-key"
 SECRET_LOCAL_PATH="${SCRIPT_DIR}/${SECRET_KEY}"
 SECRET_INFO_URL='https://docs.engineering.redhat.com/pages/viewpage.action?pageId=407312060'
 
-RED_HAT_ORG_ID="11009103"
+RED_HAT_ORG_ID="7995401"
 TARGETS_LIST_FILE="/tmp/subscription-manager-bro-targets"
 
 # These were figured experimentally with the help of self-test subcommand.
