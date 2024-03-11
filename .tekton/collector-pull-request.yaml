@@ -1,76 +1,37 @@
 apiVersion: tekton.dev/v1
 kind: PipelineRun
-
 metadata:
   annotations:
-    build.appstudio.openshift.io/repo: https://github.com/stackrox/collector?rev={{revision}}
+    build.appstudio.openshift.io/repo: https://github.com/zregvart/stackrox-collector?rev={{revision}}
     build.appstudio.redhat.com/commit_sha: '{{revision}}'
     build.appstudio.redhat.com/pull_request_number: '{{pull_request_number}}'
     build.appstudio.redhat.com/target_branch: '{{target_branch}}'
-    pipelinesascode.tekton.dev/max-keep-runs: "500"
-    # TODO(ROX-21073): re-enable for all PR branches
-    pipelinesascode.tekton.dev/on-cel-expression: event == "pull_request" && (source_branch.contains("rhtap") || source_branch.contains("konflux"))
+    pipelinesascode.tekton.dev/max-keep-runs: "3"
+    pipelinesascode.tekton.dev/on-cel-expression: event == "pull_request" && target_branch
+      == "master" && ( "collector/container/***".pathChanged() || ".tekton/collector-pull-request.yaml".pathChanged()
+      )
   creationTimestamp: null
   labels:
-    appstudio.openshift.io/application: acs
+    appstudio.openshift.io/application: stackrox-collector
     appstudio.openshift.io/component: collector
     pipelines.appstudio.openshift.io/type: build
   name: collector-on-pull-request
-  namespace: rh-acs-tenant
-
+  namespace: zregvart-tenant
 spec:
-
   params:
   - name: dockerfile
-    value: collector/container/konflux.Dockerfile
+    value: https://raw.githubusercontent.com/devfile-samples/devfile-sample-python-basic/main/docker/Dockerfile
   - name: git-url
-    value: '{{repo_url}}'
+    value: '{{source_url}}'
   - name: image-expires-after
-    value: '13w'
+    value: 5d
   - name: output-image
-    value: quay.io/redhat-user-workloads/rh-acs-tenant/acs/collector:on-pr-{{revision}}
+    value: quay.io/redhat-user-workloads-stage/zregvart-tenant/stackrox-collector/collector:on-pr-{{revision}}
   - name: path-context
-    value: .
+    value: collector/container
   - name: revision
     value: '{{revision}}'
-  - name: rebuild
-    value: 'true'
-  # TODO(ROX-20234): Enable hermetic builds
-  # - name: hermetic
-  #   value: "true"
-  # No language dependencies are required for collector image.
-  - name: prefetch-input
-    value: ''
-  - name: clone-submodules
-    value: 'true'
-  - name: build-source-image
-    value: 'true'
-
-  workspaces:
-  - name: workspace
-    volumeClaimTemplate:
-      metadata:
-        creationTimestamp: null
-      spec:
-        accessModes:
-        - ReadWriteOnce
-        resources:
-          requests:
-            storage: 5Gi
-      status: { }
-  - name: git-auth
-    secret:
-      secretName: '{{ git_auth_secret }}'
-  - name: subscription-manager-activation-key
-    secret:
-      secretName: subscription-manager-activation-key
-
-  # The pipeline regularly takes >1h to finish.
-  timeouts:
-    pipeline: 1h30m0s
-
   pipelineSpec:
-
     finally:
     - name: show-sbom
       params:
@@ -149,9 +110,6 @@ spec:
       description: Image tag expiration time, time values could be something like
         1h, 2d, 3w for hours, days, and weeks, respectively.
       name: image-expires-after
-    - default: "true"
-      description: Initialize and fetch git submodules during cloning of repository.
-      name: clone-submodules
     - default: "false"
       description: Build a source image.
       name: build-source-image
@@ -172,20 +130,15 @@ spec:
     - description: ""
       name: JAVA_COMMUNITY_DEPENDENCIES
       value: $(tasks.build-container.results.JAVA_COMMUNITY_DEPENDENCIES)
-
-    workspaces:
-    - name: workspace
-    - name: git-auth
-    - name: subscription-manager-activation-key
-
     tasks:
-
     - name: init
       params:
       - name: image-url
         value: $(params.output-image)
       - name: rebuild
         value: $(params.rebuild)
+      - name: skip-checks
+        value: $(params.skip-checks)
       taskRef:
         params:
         - name: name
@@ -195,15 +148,12 @@ spec:
         - name: kind
           value: task
         resolver: bundles
-
     - name: clone-repository
       params:
       - name: url
         value: $(params.git-url)
       - name: revision
         value: $(params.revision)
-      - name: submodules
-        value: $(params.clone-submodules)
       runAfter:
       - init
       taskRef:
@@ -211,35 +161,20 @@ spec:
         - name: name
           value: git-clone
         - name: bundle
-          value: quay.io/redhat-appstudio-tekton-catalog/task-git-clone:0.1@sha256:ddc1b741a59e24817b24f190aab820700b6a8cf78cdd1827c403375bdba8aeee
+          value: quay.io/redhat-appstudio-tekton-catalog/task-git-clone:0.1@sha256:982e53397367ea9680b5cc543f5cbfc8e90124ffb463551eea33e4477d0a7ec6
         - name: kind
           value: task
         resolver: bundles
       when:
       - input: $(tasks.init.results.build)
         operator: in
-        values: [ "true" ]
+        values:
+        - "true"
       workspaces:
       - name: output
         workspace: workspace
       - name: basic-auth
         workspace: git-auth
-
-    - name: prepare-rhel-rpm-subscriptions
-      runAfter:
-      - clone-repository
-      workspaces:
-      - name: source
-        workspace: workspace
-      - name: subscription-manager-activation-key
-        workspace: subscription-manager-activation-key
-      taskSpec:
-        steps:
-        # TODO(ROX-20651): use content sets instead of subscription manager for access to RHEL RPMs once available.
-        - name: smuggle-activation-key
-          image: registry.access.redhat.com/ubi8/ubi:latest
-          script: exec "$(workspaces.source.path)/source/.konflux/scripts/subscription-manager-bro.sh" smuggle
-
     - name: prefetch-dependencies
       params:
       - name: input
@@ -255,10 +190,14 @@ spec:
         - name: kind
           value: task
         resolver: bundles
+      when:
+      - input: $(params.hermetic)
+        operator: in
+        values:
+        - "true"
       workspaces:
       - name: source
         workspace: workspace
-
     - name: build-container
       params:
       - name: IMAGE
@@ -277,24 +216,23 @@ spec:
         value: $(tasks.clone-repository.results.commit)
       runAfter:
       - prefetch-dependencies
-      - prepare-rhel-rpm-subscriptions
       taskRef:
         params:
         - name: name
           value: buildah
         - name: bundle
-          value: quay.io/redhat-appstudio-tekton-catalog/task-buildah:0.1@sha256:e1e6c6308b8c7d5aa2faa02129af7fcc9e8dc4bbfe741c1acab5c9edca28fb77
+          value: quay.io/redhat-appstudio-tekton-catalog/task-buildah:0.1@sha256:cfb32c9f1ec9c217bc81389d6aeacdb9e7a092a7fa86d4fed7b6fbb2612f5c1d
         - name: kind
           value: task
         resolver: bundles
       when:
       - input: $(tasks.init.results.build)
         operator: in
-        values: [ "true" ]
+        values:
+        - "true"
       workspaces:
       - name: source
         workspace: workspace
-
     - name: build-source-image
       params:
       - name: BINARY_IMAGE
@@ -315,43 +253,21 @@ spec:
       when:
       - input: $(tasks.init.results.build)
         operator: in
-        values: [ "true" ]
+        values:
+        - "true"
       - input: $(params.build-source-image)
         operator: in
-        values: [ "true" ]
+        values:
+        - "true"
       workspaces:
       - name: workspace
         workspace: workspace
-
-    - name: inspect-image
-      params:
-      - name: IMAGE_URL
-        value: $(tasks.build-container.results.IMAGE_URL)
-      - name: IMAGE_DIGEST
-        value: $(tasks.build-container.results.IMAGE_DIGEST)
-      runAfter:
-      - build-container
-      taskRef:
-        params:
-        - name: name
-          value: inspect-image
-        - name: bundle
-          value: quay.io/redhat-appstudio-tekton-catalog/task-inspect-image:0.1@sha256:c9e991c0480f331f1eb49ade78c3510d4ae7cba2ec302dc39568d99dcddb62f8
-        - name: kind
-          value: task
-        resolver: bundles
-      when:
-      - input: $(params.skip-checks)
-        operator: in
-        values: [ "false" ]
-      workspaces:
-      - name: source
-        workspace: workspace
-
     - name: deprecated-base-image-check
       params:
       - name: BASE_IMAGES_DIGESTS
         value: $(tasks.build-container.results.BASE_IMAGES_DIGESTS)
+      runAfter:
+      - build-container
       taskRef:
         params:
         - name: name
@@ -364,8 +280,8 @@ spec:
       when:
       - input: $(params.skip-checks)
         operator: in
-        values: [ "false" ]
-
+        values:
+        - "false"
     - name: clair-scan
       params:
       - name: image-digest
@@ -386,8 +302,28 @@ spec:
       when:
       - input: $(params.skip-checks)
         operator: in
-        values: [ "false" ]
-
+        values:
+        - "false"
+    - name: ecosystem-cert-preflight-checks
+      params:
+      - name: image-url
+        value: $(tasks.build-container.results.IMAGE_URL)
+      runAfter:
+      - build-container
+      taskRef:
+        params:
+        - name: name
+          value: ecosystem-cert-preflight-checks
+        - name: bundle
+          value: quay.io/redhat-appstudio-tekton-catalog/task-ecosystem-cert-preflight-checks:0.1@sha256:4bcabe436ddbef6af8f8108ee234d83e116e63e91f64a77191e1492db11bf56b
+        - name: kind
+          value: task
+        resolver: bundles
+      when:
+      - input: $(params.skip-checks)
+        operator: in
+        values:
+        - "false"
     - name: sast-snyk-check
       runAfter:
       - clone-repository
@@ -403,11 +339,11 @@ spec:
       when:
       - input: $(params.skip-checks)
         operator: in
-        values: [ "false" ]
+        values:
+        - "false"
       workspaces:
       - name: workspace
         workspace: workspace
-
     - name: clamav-scan
       params:
       - name: image-digest
@@ -428,8 +364,8 @@ spec:
       when:
       - input: $(params.skip-checks)
         operator: in
-        values: [ "false" ]
-
+        values:
+        - "false"
     - name: sbom-json-check
       params:
       - name: IMAGE_URL
@@ -450,6 +386,26 @@ spec:
       when:
       - input: $(params.skip-checks)
         operator: in
-        values: [ "false" ]
-
-status: { }
+        values:
+        - "false"
+    workspaces:
+    - name: workspace
+    - name: git-auth
+      optional: true
+  taskRunTemplate: {}
+  workspaces:
+  - name: workspace
+    volumeClaimTemplate:
+      metadata:
+        creationTimestamp: null
+      spec:
+        accessModes:
+        - ReadWriteOnce
+        resources:
+          requests:
+            storage: 1Gi
+      status: {}
+  - name: git-auth
+    secret:
+      secretName: '{{ git_auth_secret }}'
+status: {}
