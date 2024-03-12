@@ -195,7 +195,7 @@ spec:
         - name: name
           value: git-clone
         - name: bundle
-          value: quay.io/redhat-appstudio-tekton-catalog/task-git-clone:0.1@sha256:ddc1b741a59e24817b24f190aab820700b6a8cf78cdd1827c403375bdba8aeee
+          value: quay.io/zregvart_redhat/task-git-clone:0.2@sha256:5743026de7bc0187ecd5553e7e1b3b3deae8408e01a86e04b2c05308da3e6ebc
         - name: kind
           value: task
         resolver: bundles
@@ -210,6 +210,9 @@ spec:
         workspace: git-auth
 
     - name: prepare-rhel-rpm-subscriptions
+      params:
+      - name: SOURCE_ARTIFACT
+        value: $(tasks.clone-repository.results.SOURCE_ARTIFACT)
       runAfter:
       - clone-repository
       workspaces:
@@ -218,16 +221,45 @@ spec:
       - name: subscription-manager-activation-key
         workspace: subscription-manager-activation-key
       taskSpec:
+        params:
+        - name: SOURCE_ARTIFACT
+          type: string
+        results:
+        - description: Produced trusted source artifact
+          name: SOURCE_ARTIFACT
+          type: string
         steps:
+        - name: use-trusted-artifact
+          image: quay.io/zregvart_redhat/build-trusted-artifacts@sha256:67035391a8794cca0a7e9bd3a63085df7db1101800f08ae837e478c17711e08a
+          args:
+            - use
+            - --store
+            - $(workspaces.source.path)
+            - $(params.SOURCE_ARTIFACT)=/var/workdir/source
         # TODO(ROX-20651): use content sets instead of subscription manager for access to RHEL RPMs once available.
         - name: smuggle-activation-key
           image: registry.access.redhat.com/ubi8/ubi:latest
-          script: exec "$(workspaces.source.path)/source/.konflux/scripts/subscription-manager-bro.sh" smuggle
-
+          script: exec "/var/workdir/source/.konflux/scripts/subscription-manager-bro.sh" smuggle
+        - name: create-trusted-artifact
+          image: quay.io/zregvart_redhat/build-trusted-artifacts@sha256:67035391a8794cca0a7e9bd3a63085df7db1101800f08ae837e478c17711e08a
+          args:
+            - create
+            - --store
+            - $(workspaces.source.path)
+            - $(results.SOURCE_ARTIFACT.path)=/var/workdir/source
+        volumes:
+          - name: workdir
+            emptyDir: {}
+        stepTemplate:
+          volumeMounts:
+            - mountPath: /var/workdir
+              name: workdir
     - name: prefetch-dependencies
       params:
       - name: input
         value: $(params.prefetch-input)
+      - name: SOURCE_ARTIFACT
+        value: $(tasks.clone-repository.results.SOURCE_ARTIFACT)
       runAfter:
       - clone-repository
       taskRef:
@@ -235,7 +267,7 @@ spec:
         - name: name
           value: prefetch-dependencies
         - name: bundle
-          value: quay.io/redhat-appstudio-tekton-catalog/task-prefetch-dependencies:0.1@sha256:e29adab9f66415b3be2e89e154c03ec685900fdad90051a555d7d027f94f874e
+          value: quay.io/zregvart_redhat/task-prefetch-dependencies:0.2@sha256:eebd3c4504c4c0a027f3a3f0a6fc1b928416a54a8b423035560ce64cf4c3ec81
         - name: kind
           value: task
         resolver: bundles
@@ -259,6 +291,10 @@ spec:
         value: $(params.image-expires-after)
       - name: COMMIT_SHA
         value: $(tasks.clone-repository.results.commit)
+      - name: SOURCE_ARTIFACT
+        value: $(tasks.prepare-rhel-rpm-subscriptions.results.SOURCE_ARTIFACT)
+      - name: CACHI2_ARTIFACT
+        value: $(tasks.prefetch-dependencies.results.CACHI2_ARTIFACT)
       runAfter:
       - prefetch-dependencies
       - prepare-rhel-rpm-subscriptions
@@ -267,7 +303,7 @@ spec:
         - name: name
           value: buildah
         - name: bundle
-          value: quay.io/redhat-appstudio-tekton-catalog/task-buildah:0.1@sha256:e1e6c6308b8c7d5aa2faa02129af7fcc9e8dc4bbfe741c1acab5c9edca28fb77
+          value: quay.io/zregvart_redhat/task-buildah:0.2@sha256:bd7f0f73578fe2c7c5194803b2662831c09f74c43670ade44501de71bb72828a
         - name: kind
           value: task
         resolver: bundles
@@ -285,6 +321,10 @@ spec:
         value: $(params.output-image)
       - name: BASE_IMAGES
         value: $(tasks.build-container.results.BASE_IMAGES_DIGESTS)
+      - name: SOURCE_ARTIFACT
+        value: $(tasks.prefetch-dependencies.results.SOURCE_ARTIFACT)
+      - name: CACHI2_ARTIFACT
+        value: $(tasks.prefetch-dependencies.results.CACHI2_ARTIFACT)
       runAfter:
       - build-container
       taskRef:
@@ -292,7 +332,7 @@ spec:
         - name: name
           value: source-build
         - name: bundle
-          value: quay.io/redhat-appstudio-tekton-catalog/task-source-build:0.1@sha256:e831f3e10362ecb21910f45ff48c3af1c0c8bea4858ca25f4f436153499f9802
+          value: quay.io/zregvart_redhat/task-source-build:0.2@sha256:b1ec71c9e7dee030999a34b51e1960fcf5d9fade9f76bcfdab25d97df04a69db
         - name: kind
           value: task
         resolver: bundles
@@ -373,6 +413,9 @@ spec:
         values: [ "false" ]
 
     - name: sast-snyk-check
+      params:
+      - name: SOURCE_ARTIFACT
+        value: $(tasks.clone-repository.results.SOURCE_ARTIFACT)
       runAfter:
       - clone-repository
       taskRef:
@@ -380,7 +423,7 @@ spec:
         - name: name
           value: sast-snyk-check
         - name: bundle
-          value: quay.io/redhat-appstudio-tekton-catalog/task-sast-snyk-check:0.1@sha256:422177f6fffa55284a30ddc4a26dca1462aee34a479529b9e2b52a5bb39606a4
+          value: quay.io/zregvart_redhat/task-sast-snyk-check:0.2@sha256:57029d9f26c8f6738ce7e0856c831222a5bcca56350c37a8c1d5a3c856fb771f
         - name: kind
           value: task
         resolver: bundles
